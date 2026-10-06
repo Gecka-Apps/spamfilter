@@ -1,0 +1,56 @@
+stages:
+  - test
+
+variables:
+  COMPOSER_CACHE_DIR: $CI_PROJECT_DIR/.composer-cache
+
+.php:
+  stage: test
+  variables:
+    WITH_EXTENSIONS: intl pdo_mysql pdo_pgsql
+  cache:
+    key: composer-$CI_JOB_IMAGE
+    paths:
+      - .composer-cache
+  before_script:
+    - composer install --no-interaction --no-progress --prefer-dist
+
+unit:
+  extends: .php
+  image: stayallive/php:$PHP
+  parallel:
+    matrix:
+      - PHP: ['8.2', '8.3', '8.4', '8.5']
+  script:
+    - vendor/bin/pint --test
+    - vendor/bin/phpstan analyse --no-progress
+    - vendor/bin/pest
+
+databases:
+  extends: .php
+  image: stayallive/php:8.4
+  services:
+    - name: mariadb:11
+      alias: mariadb
+    - name: postgres:17-alpine
+      alias: postgres
+  variables:
+    WITH_EXTENSIONS: intl pdo_mysql pdo_pgsql
+    MARIADB_DATABASE: spamfilter
+    MARIADB_USER: spamfilter
+    MARIADB_PASSWORD: spamfilter
+    MARIADB_ROOT_PASSWORD: root
+    POSTGRES_DB: spamfilter
+    POSTGRES_USER: spamfilter
+    POSTGRES_PASSWORD: spamfilter
+    SPAMFILTER_TEST_MYSQL_DSN: mysql:host=mariadb;dbname=spamfilter
+    SPAMFILTER_TEST_MYSQL_USER: spamfilter
+    SPAMFILTER_TEST_MYSQL_PASSWORD: spamfilter
+    SPAMFILTER_TEST_PGSQL_DSN: pgsql:host=postgres;dbname=spamfilter
+    SPAMFILTER_TEST_PGSQL_USER: spamfilter
+    SPAMFILTER_TEST_PGSQL_PASSWORD: spamfilter
+  script:
+    # The services take a few seconds to accept connections
+    - for i in $(seq 1 30); do php -r 'new PDO(getenv("SPAMFILTER_TEST_MYSQL_DSN"), getenv("SPAMFILTER_TEST_MYSQL_USER"), getenv("SPAMFILTER_TEST_MYSQL_PASSWORD"));' 2>/dev/null && break; sleep 2; done
+    - for i in $(seq 1 30); do php -r 'new PDO(getenv("SPAMFILTER_TEST_PGSQL_DSN"), getenv("SPAMFILTER_TEST_PGSQL_USER"), getenv("SPAMFILTER_TEST_PGSQL_PASSWORD"));' 2>/dev/null && break; sleep 2; done
+    - vendor/bin/pest tests/Storage

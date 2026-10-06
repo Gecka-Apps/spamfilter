@@ -1,0 +1,112 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+/*
+ * Downloads background tables published by spamfilter-backgrounds, and keeps
+ * a directory of them current.
+ *
+ *   spamfilter-background --list
+ *   spamfilter-background --to=/var/lib/mysite/spamfilter/background fr en
+ *   spamfilter-background --to=/var/lib/mysite/spamfilter/background --check
+ *   spamfilter-background --to=/var/lib/mysite/spamfilter/background --update
+ *
+ * --check exits with 1 when a table of the directory differs from the
+ * published one, 0 when everything is current, so a cron job or a monitoring
+ * probe can act on it. --update downloads again only what changed.
+ */
+
+use Gecka\SpamFilter\Model\BackgroundDownloader;
+
+foreach ([__DIR__ . '/../vendor/autoload.php', __DIR__ . '/../../../autoload.php'] as $autoload) {
+    if (is_file($autoload)) {
+        require $autoload;
+        break;
+    }
+}
+
+$options = getopt('', ['to:', 'list', 'check', 'update', 'manifest:', 'help'], $rest);
+$codes = array_values(array_filter(array_slice($argv, $rest), static fn (string $a): bool => ! str_starts_with($a, '--')));
+$action = match (true) {
+    isset($options['list']) => 'list',
+    isset($options['check']) => 'check',
+    isset($options['update']) => 'update',
+    default => 'download',
+};
+
+$usage = "Usage: spamfilter-background --list\n"
+    . "       spamfilter-background --to=<directory> <language codes...>\n"
+    . "       spamfilter-background --to=<directory> --check | --update\n";
+if (isset($options['help'])) {
+    echo $usage;
+    exit(0);
+}
+if ($action !== 'list' && ! isset($options['to'])) {
+    fwrite(STDERR, $usage);
+    exit(2);
+}
+if ($action === 'download' && $codes === []) {
+    fwrite(STDERR, $usage);
+    exit(2);
+}
+
+$downloader = new BackgroundDownloader(isset($options['manifest']) ? (string) $options['manifest'] : BackgroundDownloader::DEFAULT_MANIFEST);
+$directory = (string) ($options['to'] ?? '');
+
+$published = static function (BackgroundDownloader $downloader): string {
+    $version = $downloader->version();
+    $generated = $downloader->generated();
+
+    return ($version !== null ? "release $version" : 'release') . ($generated !== null ? " of " . substr($generated, 0, 10) : '');
+};
+
+try {
+    switch ($action) {
+        case 'list':
+            $sentences = $downloader->sentences();
+            foreach ($downloader->available() as $code => $name) {
+                printf("  %-5s %-28s %8s sentences\n", $code, $name, number_format($sentences[$code] ?? 0));
+            }
+            echo 'Published ', $published($downloader), "\n";
+            break;
+
+        case 'check':
+            $outdated = $downloader->outdated($directory);
+            foreach ($outdated as $code => $state) {
+                echo $state === BackgroundDownloader::CHANGED
+                    ? "$code: a newer table is published\n"
+                    : "$code: no longer published\n";
+            }
+            $changed = count(array_filter($outdated, static fn (string $state): bool => $state === BackgroundDownloader::CHANGED));
+            echo $changed === 0
+                ? "Up to date with the " . $published($downloader) . "\n"
+                : "$changed table(s) to update, run with --update\n";
+            exit($changed === 0 ? 0 : 1);
+
+        case 'update':
+            foreach ($downloader->outdated($directory) as $code => $state) {
+                if ($state === BackgroundDownloader::UNPUBLISHED) {
+                    fwrite(STDERR, "$code: no longer published, kept as is\n");
+                }
+            }
+            $written = $downloader->update($directory);
+            foreach ($written as $path) {
+                echo "Updated $path\n";
+            }
+            if ($written === []) {
+                echo "Up to date with the " . $published($downloader) . "\n";
+            }
+            break;
+
+        default:
+            foreach ($downloader->download($codes, $directory) as $path) {
+                echo "Downloaded $path\n";
+            }
+    }
+} catch (\Throwable $e) {
+    fwrite(STDERR, $e->getMessage() . "\n");
+    exit(1);
+}

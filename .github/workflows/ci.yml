@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.2', '8.3', '8.4', '8.5']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: intl, mbstring, pdo_sqlite, zlib
+          coverage: none
+
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Code style
+        run: vendor/bin/pint --test
+
+      - name: Static analysis
+        run: vendor/bin/phpstan analyse --no-progress
+
+      - name: Tests
+        run: vendor/bin/pest
+
+  databases:
+    name: MariaDB and PostgreSQL
+    runs-on: ubuntu-latest
+
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_DATABASE: spamfilter
+          MARIADB_USER: spamfilter
+          MARIADB_PASSWORD: spamfilter
+          MARIADB_ROOT_PASSWORD: root
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 3s --health-timeout 3s --health-retries 30
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: spamfilter
+          POSTGRES_USER: spamfilter
+          POSTGRES_PASSWORD: spamfilter
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U spamfilter"
+          --health-interval 3s --health-timeout 3s --health-retries 30
+
+    env:
+      SPAMFILTER_TEST_MYSQL_DSN: mysql:host=127.0.0.1;port=3306;dbname=spamfilter
+      SPAMFILTER_TEST_MYSQL_USER: spamfilter
+      SPAMFILTER_TEST_MYSQL_PASSWORD: spamfilter
+      SPAMFILTER_TEST_PGSQL_DSN: pgsql:host=127.0.0.1;port=5432;dbname=spamfilter
+      SPAMFILTER_TEST_PGSQL_USER: spamfilter
+      SPAMFILTER_TEST_PGSQL_PASSWORD: spamfilter
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: intl, mbstring, pdo_sqlite, pdo_mysql, pdo_pgsql, zlib
+          coverage: none
+
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Storage tests
+        run: vendor/bin/pest tests/Storage

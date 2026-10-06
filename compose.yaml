@@ -1,0 +1,53 @@
+# Integration tests against real MariaDB and PostgreSQL servers:
+#
+#   docker compose run --rm tests
+#   docker compose down -v
+#
+# The unit tests run without Docker (vendor/bin/pest); the database tests
+# skip themselves when the SPAMFILTER_TEST_* variables are not set.
+
+services:
+  mariadb:
+    image: mariadb:11
+    environment:
+      MARIADB_DATABASE: spamfilter
+      MARIADB_USER: spamfilter
+      MARIADB_PASSWORD: spamfilter
+      MARIADB_ROOT_PASSWORD: root
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: spamfilter
+      POSTGRES_USER: spamfilter
+      POSTGRES_PASSWORD: spamfilter
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spamfilter"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  tests:
+    image: stayallive/php:8.4
+    environment:
+      WITH_EXTENSIONS: intl pdo_mysql pdo_pgsql
+      SPAMFILTER_TEST_MYSQL_DSN: mysql:host=mariadb;dbname=spamfilter
+      SPAMFILTER_TEST_MYSQL_USER: spamfilter
+      SPAMFILTER_TEST_MYSQL_PASSWORD: spamfilter
+      SPAMFILTER_TEST_PGSQL_DSN: pgsql:host=postgres;dbname=spamfilter
+      SPAMFILTER_TEST_PGSQL_USER: spamfilter
+      SPAMFILTER_TEST_PGSQL_PASSWORD: spamfilter
+    volumes:
+      - .:/app
+    working_dir: /app
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    command: vendor/bin/pest
